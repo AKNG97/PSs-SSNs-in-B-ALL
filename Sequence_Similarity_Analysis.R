@@ -5,551 +5,357 @@ library(DESeq2)
 library(biomaRt)
 library(dplyr)
 library(tidyr)
-library(rDNAse)
 library(text.alignment)
 library(Hmisc)
 library(infotheo)
 library(ggplot2)
+library(igraph)
+library(parallel)
 
-###### Let's check sequence similarities between pairs of pseudogenes #####
+#/storage/kuijjerarea/akng/PseudogenesAnalysis/HandleReps/ExtCI/SeqSim/
+#module load R/4.2.1-foss-2022a
 
-# 1. Load clusters of pseudogenes and retrieve sequences and
-# get annotation from rowData of TCGA
+#### Let's check if highly connected genes have high SeqSim between pairs ####
+#1. Load GCN of PS
+GCN <- readRDS("GCN.RDS")
 
-Clusters = read.csv("PSCls_in_BALL.csv")
+annotPS <- readRDS("Pseudogenes_anotation_file.RDS")
+annot <- readRDS("Gene_annotation_file_of_expression_matrix.RDS")
 
-mart <- useMart("ensembl",dataset="hsapiens_gene_ensembl")
+#Filter GCN to select Pseudogene-Pseudogene edges
 
-sequences = getSequence(id=Clusters[, 1], type="ensembl_gene_id", seqType="gene_exon_intron", mart = mart)
+GCN <- GCN %>% filter(Source %in% annotPS$HGNC_symbol &
+                                      Target %in% annotPS$HGNC_symbol)
 
-annot_TCGA$ensembl <- gsub("\\.[0-9]*", "", annot_TCGA$gene_id)
+#2. Get Communities
 
-sequences <- sequences %>% mutate(Gene_name = annot_TCGA$gene_name[match(sequences$ensembl_gene_id, annot_TCGA$ensembl)])
-sequences$Gene_name[218] <- "RPSAP58"
-rownames(sequences) <- sequences$Gene_name
+g <- graph_from_data_frame(GCN[,1:3], directed = FALSE)
+set.seed(123)
+lc <- cluster_louvain(g)
 
-# 2. Get MI values
+#3. Filter Communities with more than 10 elements
+co <- unlist(communities(lc)) 
+co <- communities(lc)[sapply(communities(lc), function(x) length(x) > 10)]
 
-network <- read.csv("Network_PS_1_2_3_19_09.csv")
+#4. Get Sequences
+mart <- useEnsembl("ensembl", dataset="hsapiens_gene_ensembl", version = 110)
 
-network <- network %>% inner_join(Clusters, by = c("Source" = "Gene"))
+annotPS <- annotPS[annotPS$HGNC_symbol %in% unique(c(GCN$Source, GCN$Target)), ]
 
-network$Source <- sequences$Gene_name[match(network$Source, sequences$ensembl_gene_id)]
-network$Target <- sequences$Gene_name[match(network$Target, sequences$ensembl_gene_id)]
+sequences = getSequence(id=annotPS$Ensembl, type="ensembl_gene_id", seqType="gene_exon_intron", mart = mart)
 
+sequences[,2] <- annotPS$HGNC_symbol[match(sequences[,2], annotPS$Ensembl)]
+
+colnames(sequences) <- c("Seq", "GeneSymbol")
+
+#5. Correlate SeqSim to EdgeWeight
+
+network <- GCN[,1:3]
 network$Similarity <- NA
 
 for(i in 1:nrow(network)){
   
-  sim <- smith_waterman(sequences[sequences$Gene_name == network$Source[i],1] , 
-                        sequences[sequences$Gene_name == network$Target[i],1] 
+  print(i)
+  
+  sim <- smith_waterman(sequences[sequences$GeneSymbol == network$Source[i],1] , 
+                        sequences[sequences$GeneSymbol == network$Target[i],1] 
                         , type="characters")
   
   network$Similarity[i] <- sim[["similarity"]]
   
 }
 
-MIvsSim <- ggplot(network, aes(MI, Similarity)) + geom_point()
+#Function to calculate SeqSim
+calculate_similarity <- function(i) {
+  sim <- smith_waterman(sequences[sequences$GeneSymbol == network$Source[i], 1], 
+                        sequences[sequences$GeneSymbol == network$Target[i], 1],
+                        type = "characters")
+  return(sim[["similarity"]])
+}
 
-rcorr(network$MI, network$Similarity, type = "pearson")
+similarity_results <- mclapply(1:nrow(network),
+                               function(i) calculate_similarity(i), 
+                               mc.cores = 20)
+
+network$Similarity <- unlist(similarity_results)
+
+saveRDS(network, "Network_SeqSimPairs.RDS")
+
+rcorr(abs(network$Sp_corr), network$Similarity)
 # x    y
-# x 1.00 0.37
-# y 0.37 1.00
-rcorr(network$MI, network$Similarity, type = "spearman")
-# x    y
-# x 1.00 0.09
-# y 0.09 1.00
-infotheo::mutinformation(discretize(network$MI), discretize(network$Similarity))
-# [1] 0.06756366
+# x 1.00 0.24
+# y 0.24 1.00
+# 
+# n= 6032 
+# 
+# P
+# x  y 
+# x     0
+# y  0   
 
-# ANSW: No correlation between sequence similarity and coexpression values. If PS 
-# coexpression was driven by a bias in mapping one would expect:
-# a) Coexpression between parental gene and PSs (occurs rarely)
-# b) High correlation between COEXP vals and SeqSim (does not happen)
-# c) COEXP patterns similar in NBM to those found in cancer data
+GlobalCorrelation <- ggplot(network, aes(x = abs(Sp_corr), y = Similarity)) + 
+  labs(x = "Edge Weight", y = "Sequence similarity", 
+       title = paste0("Correlation between edge weight and sequence similarity, ρ = 0.24, p = 0"),
+       subtitle = "Complete network") +
+  geom_point()
 
-##### Are pseudogenes being expressed also in the normal bone marrow dataset? #####
+dir.create("Plots")
+ggsave("Plots/GlobalCorrelation_EdgeWeight_vs_SeqSim.png", GlobalCorrelation, height = 10, width = 10, dpi = 300)
 
-# 1. Let's load data
+saveRDS(co, "Communities_PS_TARGET_Network.RDS")
 
-BALL_BM_tpms <- assay(BALL_BM_raw_primary, 4)
-Normal_BoneMarrow_tpms <- assay(Normal_BoneMarrow, 4)
+#6. Correlate SeqSim to EdgeWeight by Community
 
-rownames(BALL_BM_tpms) <- rowData(BALL_BM_raw_primary)$gene_name
-rownames(Normal_BoneMarrow_tpms) <- rowData(Normal_BoneMarrow)$gene_name
-
-PS_in_network <- sequences$Gene_name[-which(sequences$Gene_name %in% annot[annot$Type == "protein_coding", "HGNC_symbol"])]
-
-PS_in_network_TPMs_BALL <- BALL_BM_tpms[rownames(BALL_BM_tpms) %in% PS_in_network,]
-PS_in_network_TPMs_NBM <- Normal_BoneMarrow_tpms[rownames(Normal_BoneMarrow_tpms) %in% PS_in_network,]
-
-PS_in_network_TPMs_BALL_pivot <- PS_in_network_TPMs_BALL %>% as.data.frame %>% mutate(Gene = rownames(PS_in_network_TPMs_BALL)) %>% 
-  pivot_longer(!Gene, names_to = "Samples", values_to = "TPMs") %>% mutate(Phenotype = "BALL")
-
-PS_in_network_TPMs_NBM_pivot <- PS_in_network_TPMs_NBM %>% as.data.frame %>% mutate(Gene = rownames(PS_in_network_TPMs_NBM)) %>% 
-  pivot_longer(!Gene, names_to = "Samples", values_to = "TPMs") %>% mutate(Phenotype = "Normal Bone Marrow")
-
-# Make boxplots
-
-ggplot(PS_in_network_TPMs_NBM_pivot, aes(Gene, TPMs, color = Gene)) + geom_boxplot(show.legend = FALSE) +
-  theme(axis.text.x = element_text(angle = 90, size = 8))
-
-ggplot(PS_in_network_TPMs_BALL_pivot, aes(Gene, TPMs, color = Gene)) + geom_boxplot(show.legend = FALSE) +
-  theme(axis.text.x = element_text(angle = 90, size = 8))
-
-#
-ggplot(PS_in_network_TPMs_NBM_pivot[PS_in_network_TPMs_NBM_pivot$Gene %in% c("RPL31P7", "RPL31P2"),], aes(Gene, TPMs, color = Gene)) + geom_boxplot(show.legend = FALSE) +
-  theme(axis.text.x = element_text(angle = 90, size = 8))
-
-ggplot(PS_in_network_TPMs_BALL_pivot[PS_in_network_TPMs_BALL_pivot$Gene %in% c("RPL31P7", "RPL31P2"),], aes(Gene, TPMs, color = Gene)) + geom_boxplot(show.legend = FALSE) +
-  theme(axis.text.x = element_text(angle = 90, size = 8))
-#
-
-# 2. Is the expression of a pseudogene correlated with its similarity to the PC sequence?
-# Let's make several examples of it, calculate similarities and plot a scatter of similarity and TPMs, e.g. RPL31
-
-RPL31_TPMs_BALL <- BALL_BM_tpms[grep("RPL31", rownames(BALL_BM_tpms)),]
-RPL31_TPMs_NBM <- Normal_BoneMarrow_tpms[grep("RPL31", rownames(Normal_BoneMarrow_tpms)),]
-
-RPL31_TPMs_BALL_pivot <- RPL31_TPMs_BALL %>% as.data.frame %>% mutate(Gene = rownames(RPL31_TPMs_BALL)) %>% 
-  pivot_longer(!Gene, names_to = "Samples", values_to = "TPMs") %>% mutate(Phenotype = "BALL")
-
-RPL31_TPMs_NBM_pivot <- RPL31_TPMs_NBM %>% as.data.frame %>% mutate(Gene = rownames(RPL31_TPMs_NBM)) %>% 
-  pivot_longer(!Gene, names_to = "Samples", values_to = "TPMs") %>% mutate(Phenotype = "Normal Bone Marrow")
-
-ggplot(RPL31_TPMs_BALL_pivot[RPL31_TPMs_BALL_pivot$Gene != "RPL31",], aes(Gene, TPMs, color = Gene)) + geom_boxplot(show.legend = FALSE) +
-  theme(axis.text.x = element_text(angle = 90, size = 8))
-
-ggplot(RPL31_TPMs_NBM_pivot[RPL31_TPMs_NBM_pivot$Gene != "RPL31",], aes(Gene, TPMs, color = Gene)) + geom_boxplot(show.legend = FALSE) +
-  theme(axis.text.x = element_text(angle = 90, size = 8))
-
-#Get sequences
-
-as.data.frame(rowData(BALL_BM_raw_primary))[grep("RPL31", rownames(BALL_BM_tpms)),]
-
-ensembl_RPL31 <- annot_TCGA$ensembl[match(rownames(RPL31_TPMs_BALL), annot_TCGA$gene_name)]
-
-sequences_RPL31 = getSequence(id=ensembl_RPL31, type="ensembl_gene_id", seqType="gene_exon_intron", mart = mart)
-
-sequences_RPL31 <- sequences_RPL31 %>% mutate(Gene_name = annot_TCGA$gene_name[match(sequences_RPL31$ensembl_gene_id, annot_TCGA$ensembl)])
-
-for(i in 1:nrow(sequences_RPL31)){
+for(i in 1:length(co)){
   
-  sim <- smith_waterman(sequences_RPL31[sequences_RPL31$Gene_name == "RPL31",1], 
-                        sequences_RPL31[i,1] 
-                        , type="characters")
+  Comm <- network[network$Source %in% co[[i]] &
+                    network$Target %in% co[[i]], ]
   
-  SeqSim.DF <- data.frame(Gene1 = sequences_RPL31[sequences_RPL31$Gene_name == "RPL31",3],
-                  Gene2 = sequences_RPL31[i,3],
-                  SeqSim = sim[["similarity"]])
+  correlation <- round(rcorr(Comm$Sp_corr, Comm$Similarity)$r[1,2], 2)
+  pvalue <- round(rcorr(Comm$Sp_corr, Comm$Similarity)$P[1,2], 2)
   
-  if(i == 1) {
-    x = SeqSim.DF
-  } else {
-    x <- rbind(SeqSim.DF, x)
-  }
+  CorrelationPlot <- ggplot(Comm, aes(x = abs(Sp_corr), y = Similarity)) + 
+    labs(x = "Edge Weight", y = "Sequence similarity", 
+         title = paste0("Correlation between edge weight and sequence similarity, ", 
+                                  "ρ = ", correlation, ", p = ",  pvalue),
+         subtitle = paste0("Community ", i)) +
+    geom_point()
+
+  ggsave(paste0("Plots/Correlation_EdgeWeight_vs_SeqSim_Comm", i, ".png"), CorrelationPlot, 
+         height = 10, width = 10, dpi = 300)
   
 }
 
-RPL31_means_BALL <- RPL31_TPMs_BALL %>% as.data.frame() %>% mutate(Gene = rownames(RPL31_TPMs_BALL)) %>% relocate(Gene) %>% 
-  rowwise() %>% group_by(Gene) %>% summarise(Mean_BALL = mean(c_across(where(is.numeric))))
 
-RPL31_means_NBM <- RPL31_TPMs_NBM %>% as.data.frame() %>% mutate(Gene = rownames(RPL31_TPMs_NBM)) %>% relocate(Gene) %>% 
-  rowwise() %>% group_by(Gene) %>% summarise(Mean_NBM = mean(c_across(where(is.numeric))))
+#### Now let's analyze pseudogenes families and see if their expression is correlated to their SeqSim with the Parental Gene ####
 
-RPL31_corrs_inputs <- x %>% inner_join(RPL31_means_BALL, by = c("Gene2" = "Gene")) %>% inner_join(RPL31_means_NBM, by = c("Gene2" = "Gene"))
+ALL <- readRDS("TARGET_P2_SummarizedExperiment.RDS")
 
-rcorr(RPL31_corrs_inputs$SeqSim[-27],  RPL31_corrs_inputs$Mean_BALL[-27], type = "pearson")
-# x    y
-# x 1.00 0.17
-# y 0.17 1.00
-# 
-# n= 34 
-# 
-# 
-# P
-# x      y     
-# x        0.3451
-# y 0.3451    
+dim(ALL)
+#[1] 60660   532
+which(is.na(ALL$sample_type))
+#integer(0)
+which(is.na(ALL$definition))
+#integer(0)
+table(as.factor(ALL$primary_diagnosis))
+# Acute lymphocytic leukemia 
+# 532
 
-rcorr(RPL31_corrs_inputs$SeqSim[-27],  RPL31_corrs_inputs$Mean_NBM[-27], type = "pearson")
+table(as.factor(ALL$definition))
+# Primary Blood Derived Cancer - Bone Marrow 
+# 387 
+# Primary Blood Derived Cancer - Peripheral Blood 
+# 76 
+# Recurrent Blood Derived Cancer - Bone Marrow 
+# 68 
+# Recurrent Blood Derived Cancer - Peripheral Blood 
+# 1 
 
-# x    y
-# x 1.00 0.05
-# y 0.05 1.00
-# 
-# n= 34 
-# 
-# 
-# P
-# x      y     
-# x        0.7717
-# y 0.7717      
+ALL_primaryBM <- ALL[,ALL$definition == "Primary Blood Derived Cancer - Bone Marrow"]
 
-rcorr(RPL31_corrs_inputs$SeqSim[-27],  RPL31_corrs_inputs$Mean_BALL[-27], type = "spearman")
-# x   y
-# x 1.0 0.5
-# y 0.5 1.0
-# 
-# n= 34 
-# 
-# 
-# P
-# x      y     
-# x        0.0024
-# y 0.0024    
+CI.ALL <- as.data.frame(colData(ALL_primaryBM))
 
-rcorr(RPL31_corrs_inputs$SeqSim[-27],  RPL31_corrs_inputs$Mean_NBM[-27], type = "spearman")
-# x    y
-# x 1.00 0.31
-# y 0.31 1.00
-# 
-# n= 34 
-# 
-# 
-# P
-# x      y     
-# x        0.0755
-# y 0.0755  
+#Load Clinical Information from TCGA
+CI_1_ALL <- readxl::read_xlsx("ALL_CI_1.xlsx")
+CI_2_ALL <- readxl::read_xlsx("ALL_CI_2.xlsx")
+CI_3_ALL <- readxl::read_xlsx("ALL_CI_3.xlsx")
+CI_4_ALL <- readxl::read_xlsx("ALL_CI_4.xlsx")
+CI_5_ALL <- readxl::read_xlsx("ALL_CI_5.xlsx")
 
-mutinformation(discretize(RPL31_corrs_inputs$SeqSim[-27]), discretize(RPL31_corrs_inputs$Mean_BALL[-27]))
-#0.1216422
-mutinformation(discretize(RPL31_corrs_inputs$SeqSim[-27]), discretize(RPL31_corrs_inputs$Mean_NBM[-27]))
-#0.1353224
+CI_full_ALL <- rbind(CI_1_ALL, CI_2_ALL, CI_3_ALL, CI_4_ALL, CI_5_ALL)
+table(CI_full_ALL$`Cell of Origin`)
+# B Cell ALL B precursor (Non-T, Non-B ALL) 
+# 517                             20 
+# B-Precursor                     T Cell ALL 
+# 271                            269 
+table(CI_full_ALL$`Vital Status`)
+# Alive    Dead Unknown 
+# 870     195       7 
 
-ggplot(RPL31_corrs_inputs[-27,], aes(Mean_BALL, SeqSim )) + geom_point() + geom_smooth(method="lm")
+CI_full_ALL <- CI_full_ALL %>% dplyr::rename(VS_update = `Vital Status`,
+                                             OS_time_update = `Overall Survival Time in Days`,
+                                             patient = `TARGET USI`)
+CI_full_ALL <- CI_full_ALL[!duplicated(CI_full_ALL$patient),]
+CI_full_BALL <- CI_full_ALL[CI_full_ALL$`Cell of Origin` %in% c("B Cell ALL", "B-Precursor"),]
 
-ggplot(RPL31_corrs_inputs[-27,], aes(Mean_NBM, SeqSim )) + geom_point() + geom_smooth(method="lm")
+CI_BALL <- CI.ALL %>% inner_join(CI_full_BALL[,c("patient", "VS_update", "OS_time_update")],
+                                 by = c("patient" = "patient"))
+table(CI_BALL$VS_update)
+# Alive    Dead Unknown 
+# 74      65       3 
 
-#Okay, nice test, now let's run it with multiple pseudogenes
-#2.1 Identify pseudogenes and parental genes in data
+which(CI_BALL$VS_update == "Unknown")
+#[1]   8  24 102
 
-PS_in_Network <- rownames(PS_in_network_TPMs_BALL)
-#remove RNU6-8, SNHG9, HSP90AB3P
-PS_in_Network <- PS_in_Network[-c(14, 22, 198)]
+CI_BALL <- CI_BALL[,c("patient", "barcode", "vital_status", "days_to_death", "days_to_last_follow_up", "VS_update", "OS_time_update")]
+CI_BALL[which(CI_BALL$VS_update == "Unknown"),]
+# patient                  barcode vital_status days_to_death
+# 8   TARGET-10-PANWEZ TARGET-10-PANWEZ-09B-01R        Alive            NA
+# 24  TARGET-10-PAPHYN TARGET-10-PAPHYN-09B-01R        Alive            NA
+# 102 TARGET-10-PASIZE TARGET-10-PASIZE-09B-01R      Unknown            NA
+# days_to_last_follow_up VS_update OS_time_update
+# 8                       NA   Unknown           3145
+# 24                      NA   Unknown           3012
+# 102                     NA   Unknown           1699
+
+CI_BALL$VS_update[which(CI_BALL$VS_update == "Unknown")] <- CI_BALL$vital_status[which(CI_BALL$VS_update == "Unknown")]
+table(CI_BALL$VS_update)
+# Alive    Dead Unknown 
+# 76      65       1  
+
+CI_BALL <- CI_BALL[CI_BALL$VS_update %in% c("Alive", "Dead"),]
+table(CI_BALL$VS_update)
+# Alive  Dead 
+# 76    65 
+CI_BALL$primary_diagnosis = "BALL"
+dim(CI_BALL)
+#[1] 141   8
+
+BALL <- ALL_primaryBM[,ALL_primaryBM$patient %in% CI_BALL$patient]
+dim(BALL)
+#[1] 60660   141
+
+#Let's check for replicates
+which(duplicated(BALL$patient))
+#[1]  5  16  21  23  76  83 120 125 126
+
+#Prepare to add them with DESeq2
+
+which((1:ncol(BALL) == match(colnames(BALL), CI_BALL$barcode)) == FALSE)
+#integer(0). Hence, samples in expression matrix and metadata are in the same order
+
+BALL_TPM <- assay(BALL, 4)
+
+annotPS <- readRDS("Pseudogenes_anotation_file.RDS")
+annot <- readRDS("Gene_annotation_file_of_expression_matrix.RDS")
+                             
+BALL_TPM <- BALL_TPM[rownames(BALL_TPM) %in% annot$gene_id, ]
+rownames(BALL_TPM) <- annot$HGNC_symbol[match(rownames(BALL_TPM), annot$gene_id)]
+
+PS_in_Network <- rownames(BALL_TPM[rownames(BALL_TPM) %in% unique(c(GCN$Source, GCN$Target)), ])
 
 PG <- unique(gsub("P[^P]*$", "", PS_in_Network))
-# PG <- readRDS("PG.RDS")
-saveRDS(PG, "PG.RDS")
 
-BALL_BM_tpms_rm_PS <- BALL_BM_tpms[!rownames(BALL_BM_tpms) == "RPSAP58",]
-Normal_BoneMarrow_tpms_rm_PS <- Normal_BoneMarrow_tpms[!rownames(Normal_BoneMarrow_tpms) == "RPSAP58",]
+#We need to run this 124 families were excluded for a mistake in line 239
 
-# rownames(BALL_BM_tpms_rm_PS[grep(paste("^", PG[i], "$|", PG[i], "P",  "\\d", sep = ""), rownames(BALL_BM_tpms_rm_PS)),])
-# 
-# rownames(BALL_BM_tpms_rm_PS[grep("^TUBB$|TUBBP\\d+", rownames(BALL_BM_tpms_rm_PS)),])
+mart <- useEnsembl("ensembl", dataset="hsapiens_gene_ensembl", version = 110)
 
-#Use counts
-# on server normalized_counts <- readRDS("TMM_deseq_nom_counts.RDS")
-BALL_BM_tpms_rm_PS <- normalized_counts[,1:128]
-Normal_BoneMarrow_tpms_rm_PS <- normalized_counts[,-c(1:128)]
+dir.scatters <- "Scatter_SeqSim"
 
-BALL_BM_tpms_rm_PS <- BALL_BM_tpms_rm_PS[-which(rownames(BALL_BM_tpms_rm_PS) %in% c("RPSAP58","HSP90AB3P")),]
-Normal_BoneMarrow_tpms_rm_PS <- Normal_BoneMarrow_tpms_rm_PS[-which(rownames(Normal_BoneMarrow_tpms_rm_PS) %in% c("RPSAP58","HSP90AB3P")),]
+dir.create(dir.scatters)
 
-###### Automatization #####
-dir.create("/home/anakamura/SSN_pseudogenes/Redo_in_Oslo/scatters_SeqSim_vs_MeanExprCounts")
-dir.scatters <- "/home/anakamura/SSN_pseudogenes/Redo_in_Oslo/scatters_SeqSim_vs_MeanExprCounts"
+#We will skip 31 = H3, don't know which is the parental gene
+#MT-CO3 (i=65) is not present on the expression matrix, let's skip
+#MT-ND4L (i = 66) is not present on the expression matrix, let's skip
+#RNA5S ( i = 67) is not present on the expression matrix, let's skip
+#103 = TUBA, which referes to tublin alpha, let's use as symbol TUBA1A
+#Problem with 105
+#134 = MTCO1, symbol is not correct, could be MT-CO1, but it is not present either, let's skip
+#141 = MTCYB, symbol is not correct, could be MT-CYB, but it is not present either, let's skip
+#151 = MTND2, symbol is not correct and is not in annot, let's skip
+#153 = MTND4, symbol is not correct and is not in annot, let's skip
+#155 = MTND1, symbol is not correct and is not in annot, let's skip
+#171 = MTND6, symbol is not correct and is not in annot, let's skip
+#173 = MTATP6, symbol is not correct and is not in annot, let's skip
+#187 = MTCO2, symbol is not correct and is not in annot, let's skip
+#190 = MTND5, symbol is not correct and is not in annot, let's skip
 
-dir.create("/home/anakamura/SeqSims/scatters_SeqSim_vs_MeanExprCounts")
-dir.scatters <- "/home/anakamura/SeqSims/scatters_SeqSim_vs_MeanExprCounts"
-annot_TCGA<- readRDS("annot_TCGA_use.RDS") 
-PG <- readRDS("PG.RDS")
+PG[103] <- "TUBA1A"
 
-for(i in 55:length(PG)){
+for(i in 191:length(PG)){
   
   print(i)
   print(paste("Analayzing", PG[i]))
   
-  PG_TPMs_BALL <- BALL_BM_tpms_rm_PS[grep(paste("^", PG[i], "$|", PG[i], "P",  "\\d+", sep = ""), rownames(BALL_BM_tpms_rm_PS)),]
-  PG_TPMs_NBM <- Normal_BoneMarrow_tpms_rm_PS[grep(paste("^", PG[i], "$|", PG[i], "P",  "\\d+", sep = ""), rownames(Normal_BoneMarrow_tpms_rm_PS)),]
+if(!(i %in% c(31, 65, 66, 67, 134)))  {
   
-  PG_TPMs_BALL_pivot <- PG_TPMs_BALL %>% as.data.frame %>% mutate(Gene = rownames(PG_TPMs_BALL)) %>% 
-    pivot_longer(!Gene, names_to = "Samples", values_to = "Counts") %>% mutate(Phenotype = "BALL")
+  PG_TPMs_BALL <- BALL_TPM[c(grep(paste("^", PG[i], "P\\d+$", sep = ""), rownames(BALL_TPM)),
+                             which(rownames(BALL_TPM) == PG[i])),]
+  # PG_TPMs_BALL <- BALL_TPM[c(grep(paste("^", PG[i], "P\\d+$", sep = ""), rownames(BALL_TPM)),
+  #                            which(rownames(BALL_TPM) == "TUBA1A")),]
+  # 
   
-  PG_TPMs_NBM_pivot <- PG_TPMs_NBM %>% as.data.frame %>% mutate(Gene = rownames(PG_TPMs_NBM)) %>% 
-    pivot_longer(!Gene, names_to = "Samples", values_to = "Counts") %>% mutate(Phenotype = "Normal Bone Marrow")
-  
-  ensembl_PG <- annot_TCGA$ensembl[match(rownames(PG_TPMs_BALL), annot_TCGA$gene_name)]
-  
-  print("Getting sequences")
-  sequences_PG = getSequence(id=ensembl_PG, type="ensembl_gene_id", seqType="gene_exon_intron", mart = mart)
-  
-  sequences_PG <- sequences_PG %>% mutate(Gene_name = annot_TCGA$gene_name[match(sequences_PG$ensembl_gene_id, annot_TCGA$ensembl)])
-  
-  print("Getting SeqSims")
-  for(j in 1:nrow(sequences_PG)){
+ if(!is.null(dim(PG_TPMs_BALL))){
+    if(nrow(PG_TPMs_BALL) > 10){
+    PG_TPMs_BALL_pivot <- PG_TPMs_BALL %>% as.data.frame %>% mutate(Gene = rownames(PG_TPMs_BALL)) %>% 
+      pivot_longer(!Gene, names_to = "Samples", values_to = "TPMs") %>% mutate(Phenotype = "BALL")
     
-    sim <- smith_waterman(sequences_PG[sequences_PG$Gene_name == PG[i],1], 
-                          sequences_PG[j,1] 
-                          , type="characters")
+    ensembl_PG <- annot$Ensembl[match(rownames(PG_TPMs_BALL), annot$HGNC_symbol)]
     
-    SeqSim.DF <- data.frame(Gene1 = sequences_PG[sequences_PG$Gene_name == PG[i],3],
-                            Gene2 = sequences_PG[j,3],
-                            SeqSim = sim[["similarity"]])
+    print("Getting sequences")
+    sequences_PG = getSequence(id=ensembl_PG, type="ensembl_gene_id", seqType="gene_exon_intron", mart = mart)
     
-    if(j == 1) {
-      x = SeqSim.DF
-    } else {
-      x <- rbind(SeqSim.DF, x)
+    sequences_PG <- sequences_PG %>% mutate(Gene_name = annot$HGNC_symbol[match(sequences_PG$ensembl_gene_id, annot$Ensembl)])
+    
+    print("Getting SeqSims")
+    for(j in 1:nrow(sequences_PG)){
+      
+    if(sequences_PG[j,2] != PG[i]) {
+    #if(sequences_PG[j,2] != "TUBA1A") {
+      
+      sim <- smith_waterman(sequences_PG[sequences_PG$Gene_name == PG[i],1], 
+                            sequences_PG[j,1] 
+                            , type="characters")
+      
+      SeqSim.DF <- data.frame(Gene1 = sequences_PG[sequences_PG$Gene_name == PG[i],3],
+                              Gene2 = sequences_PG[j,3],
+                              SeqSim = sim[["similarity"]])
+      
+      if(!exists("x")){
+        x = SeqSim.DF
+      } else {
+        x <- rbind(SeqSim.DF, x)
+      }
+      }
     }
-  }
-  
-  print("Make scatter")
-  PG_means_BALL <- PG_TPMs_BALL %>% as.data.frame() %>% mutate(Gene = rownames(PG_TPMs_BALL)) %>% relocate(Gene) %>% 
-    rowwise() %>% group_by(Gene) %>% summarise(Mean_BALL = mean(c_across(where(is.numeric))))
-  
-  PG_means_NBM <- PG_TPMs_NBM %>% as.data.frame() %>% mutate(Gene = rownames(PG_TPMs_NBM)) %>% relocate(Gene) %>% 
-    rowwise() %>% group_by(Gene) %>% summarise(Mean_NBM = mean(c_across(where(is.numeric))))
-  
-  PG_corrs_inputs <- x %>% inner_join(PG_means_BALL, by = c("Gene2" = "Gene")) %>% inner_join(PG_means_NBM, by = c("Gene2" = "Gene"))
-  
-  PG_corrs_inputs <- PG_corrs_inputs[-which(PG_corrs_inputs$Gene1 == PG_corrs_inputs$Gene2),]
-  
-  scatter_BALL <- ggplot(PG_corrs_inputs, aes(Mean_BALL, SeqSim )) + geom_point() + geom_smooth(method="lm") +
-    labs(title = paste(PG[i]),
-         subtitle = "BALL")
-
-  ggsave(filename =  paste0(dir.scatters, "/ScatterPlotCounts_",PG[i], "_BALL.png"), plot = scatter_BALL, units="in",
-         width=10, height=10, dpi =300, bg = "white")
-  
-  scatter_NBM <- ggplot(PG_corrs_inputs, aes(Mean_NBM, SeqSim )) + geom_point() + geom_smooth(method="lm") +
-    labs(title = paste(PG[i]),
-         subtitle = "Normal bone marrow")
-  
-  ggsave(filename =  paste0(dir.scatters, "/ScatterPlotCounts_",PG[i], "_NBM.png"), plot = scatter_NBM, units="in",
-         width=10, height=10, dpi =300, bg = "white")
-  
-  if(i == 1) {
-    Full_PG_corrs_inputs = PG_corrs_inputs
-  } else {
-    Full_PG_corrs_inputs <- rbind(Full_PG_corrs_inputs, PG_corrs_inputs)
-  }
-  
-  if(length(PG_corrs_inputs$Mean_BALL) > 4) {
+    
+    print("Make scatter")
+    PG_means_BALL <- PG_TPMs_BALL %>% as.data.frame() %>% mutate(Gene = rownames(PG_TPMs_BALL)) %>% relocate(Gene) %>% 
+      rowwise() %>% group_by(Gene) %>% summarise(Mean_BALL = mean(c_across(where(is.numeric))))
+    
+    PG_corrs_inputs <- x %>% inner_join(PG_means_BALL, by = c("Gene2" = "Gene"))
+    
+    PG_corrs_inputs <- PG_corrs_inputs[-which(PG_corrs_inputs$Gene1 == PG_corrs_inputs$Gene2),]
+    
+    scatter_BALL <- ggplot(PG_corrs_inputs, aes(x = Mean_BALL, y = SeqSim)) + geom_point() + geom_smooth(method="lm") +
+      labs(title = paste(PG[i]),
+           subtitle = "BALL", 
+           x = "Mean expression (TPMs)", y = "Sequence similarity")
+    
+    ggsave(filename =  paste0(dir.scatters, "/ScatterPlotCounts_",PG[i], "_BALL.png"), plot = scatter_BALL, units="in",
+           width=10, height=10, dpi =300, bg = "white")
+    
+    if(!exists("Full_PG_corrs_inputs")){
+      Full_PG_corrs_inputs = PG_corrs_inputs
+    } else {
+      Full_PG_corrs_inputs <- rbind(Full_PG_corrs_inputs, PG_corrs_inputs)
+    }
+    
     print("Making correlations")
     Corr_BALL <- rcorr(PG_corrs_inputs$Mean_BALL, PG_corrs_inputs$SeqSim, type = "spearman")
-    Corr_NBM <- rcorr(PG_corrs_inputs$Mean_NBM, PG_corrs_inputs$SeqSim, type = "spearman")
     
-    MI_BALL <- mutinformation(discretize(PG_corrs_inputs$Mean_BALL), discretize(PG_corrs_inputs$SeqSim))
-    MI_NBM <- mutinformation(discretize(PG_corrs_inputs$Mean_NBM), discretize(PG_corrs_inputs$SeqSim))
+    Mi_BALL <- mutinformation(discretize(PG_corrs_inputs$Mean_BALL), discretize(PG_corrs_inputs$SeqSim))
     
     corr_df <- data.frame(Gene = PG[i],
-                          CorrV_BALL = Corr_BALL$r[1,2],
-                          CorrP_BALL = Corr_BALL$P[1,2],
-                          CorrV_NBM = Corr_NBM$r[1,2],
-                          CorrP_NBM = Corr_NBM$P[1,2],
-                          MiV_BALL = MI_BALL,
-                          MiV_NBM = MI_NBM)
+                          Rho = Corr_BALL$r[1,2],
+                          P = Corr_BALL$P[1,2],
+                          MiV_BALL = Mi_BALL)
     
-    if(i == 1) {
+    if(!exists("Full_corr_df")){
       Full_corr_df = corr_df
     } else {
       Full_corr_df <- rbind(Full_corr_df, corr_df)
-    } 
-  } else {
-    print(paste(PG[i],"dosen't have enough paired pseudogenes for correlation estimation"))
-  }
+    }
+  } }}
 }
 
 saveRDS(Full_corr_df, "Full_corr_df.RDS")
 saveRDS(Full_PG_corrs_inputs, "Full_PG_corrs_inputs.RDS")
 
-Full_corr_df <- readRDS("Full_corr_df.RDS")
-Full_PG_corrs_inputs <- readRDS("Full_PG_corrs_inputs.RDS")
-
 #Analyze results
-Relevant_corr_BALL <- Full_corr_df[Full_corr_df$CorrP_BALL < 0.05 & 
-                                     Full_corr_df$CorrV_BALL >= 0.5,]
-
-Relevant_corr_NBM <- Full_corr_df[Full_corr_df$CorrP_NBM < 0.05 & 
-                                     Full_corr_df$CorrV_NBM >= 0.5,]
-
-Global_relevant <- intersect(Relevant_corr_BALL$Gene, Relevant_corr_NBM$Gene)
-
-Exclusive_BALL <- Relevant_corr_BALL$Gene[!(Relevant_corr_BALL$Gene %in% Relevant_corr_NBM$Gene)]
-
-Exclusive_NBM <- Relevant_corr_NBM$Gene[!(Relevant_corr_NBM$Gene %in% Relevant_corr_BALL$Gene)]
-
-Full_corr_df$Gene[!(Full_corr_df$Gene %in% Relevant_corr_BALL$Gene & 
-  Full_corr_df$Gene %in% Relevant_corr_NBM$Gene)]
-
-Full_PG_corrs_inputs$num <- rownames(Full_PG_corrs_inputs)
-Full_PG_corrs_inputs <- Full_PG_corrs_inputs[!(Full_PG_corrs_inputs$num %in% c(139,425,1212,158,180,340,1137,1421,935,1177,4123,5117,1181)),-6]
-
-dir.create("Relevant_plots")
-for(i in 1:length(Global_relevant)){
-  
-  gene <- Global_relevant[i]
-  
-  corrs <- Full_PG_corrs_inputs[Full_PG_corrs_inputs$Gene1 == gene, ]
-  
-  nbm_plot <- ggplot(corrs, 
-         aes(Mean_NBM, SeqSim, label = corrs[,2] )) + 
-    geom_point() + 
-       geom_smooth(method = "lm") +
-    labs(title = gene,
-         subtitle = "NBM") + geom_text(angle = 45)
-  
-  ggsave(filename =  paste0( gene, "_NBM.png"), plot = nbm_plot, units="in",
-         width=10, height=10, dpi =300, bg = "white")
-  
-  ball_plot <- ggplot(corrs, 
-                     aes(Mean_BALL, SeqSim, label = corrs[,2] )) + 
-    geom_point() + 
-    geom_smooth(method = "lm") +
-    labs(title = gene,
-         subtitle = "BALL") + geom_text(angle = 45)
-  
-  ggsave(filename =  paste0(gene, "_BALL.png"), plot = ball_plot, units="in",
-         width=10, height=10, dpi =300, bg = "white")
-  
-}
-
-for(i in 1:length(Exclusive_BALL)){
-  
-  gene <- Exclusive_BALL[i]
-  
-  corrs <- Full_PG_corrs_inputs[Full_PG_corrs_inputs$Gene1 == gene, ]
-  
-  nbm_plot <- ggplot(corrs, 
-                     aes(Mean_NBM, SeqSim, label = corrs[,2] )) + 
-    geom_point() + 
-    geom_smooth(method = "lm") +
-    labs(title = gene,
-         subtitle = "NBM") + geom_text(angle = 45)
-  
-  ggsave(filename =  paste0(gene, "_NBM.png"), plot = nbm_plot, units="in",
-         width=10, height=10, dpi =300, bg = "white")
-  
-  ball_plot <- ggplot(corrs, 
-                      aes(Mean_BALL, SeqSim, label = corrs[,2] )) + 
-    geom_point() + 
-    geom_smooth(method = "lm") +
-    labs(title = gene,
-         subtitle = "BALL") + geom_text(angle = 45)
-  
-  ggsave(filename =  paste0(gene, "_BALL.png"), plot = ball_plot, units="in",
-         width=10, height=10, dpi =300, bg = "white")
-  
-}
-
-for(i in 1:length(Exclusive_NBM)){
-  
-  gene <- Exclusive_NBM[i]
-  
-  corrs <- Full_PG_corrs_inputs[Full_PG_corrs_inputs$Gene1 == gene, ]
-  
-  nbm_plot <- ggplot(corrs, 
-                     aes(Mean_NBM, SeqSim, label = corrs[,2] )) + 
-    geom_point() + 
-    geom_smooth(method = "lm") +
-    labs(title = gene,
-         subtitle = "NBM") + geom_text(angle = 45)
-  
-  ggsave(filename =  paste0( gene, "_NBM.png"), plot = nbm_plot, units="in",
-         width=10, height=10, dpi =300, bg = "white")
-  
-  ball_plot <- ggplot(corrs, 
-                      aes(Mean_BALL, SeqSim, label = corrs[,2] )) + 
-    geom_point() + 
-    geom_smooth(method = "lm") +
-    labs(title = gene,
-         subtitle = "BALL") + geom_text(angle = 45)
-  
-  ggsave(filename =  paste0(gene, "_BALL.png"), plot = ball_plot, units="in",
-         width=10, height=10, dpi =300, bg = "white")
-  
-}
-
-rcorr(Full_PG_corrs_inputs$Mean_BALL[Full_PG_corrs_inputs$Gene1 == "RPL10A"]
-      , Full_PG_corrs_inputs$SeqSim[Full_PG_corrs_inputs$Gene1 == "RPL10A"], type = "pearson")
+Relevant_corr_BALL <- Full_corr_df[Full_corr_df$P < 0.05 & 
+                                     Full_corr_df$Rho >= 0.5,]
 
 
-ggplot(Full_PG_corrs_inputs[Full_PG_corrs_inputs$Gene1 == "RPL10A",], aes(SeqSim)) + geom_histogram() +
-  stat_function(fun = dnorm, lwd = 2, col = 'red',
-                args = list(mean = mean(Full_PG_corrs_inputs$Mean_BALL[Full_PG_corrs_inputs$Gene1 == "RPL10A"]), sd = sd(Full_PG_corrs_inputs$SeqSim[Full_PG_corrs_inputs$Gene1 == "RPL10A"])))
-
-ggplot(Full_PG_corrs_inputs[Full_PG_corrs_inputs$Gene1 == "RPL10A",], aes(SeqSim)) + geom_histogram() +
-  stat_function(fun = dnorm, lwd = 2, col = 'red',
-                args = list(mean = mean(Full_PG_corrs_inputs$SeqSim[Full_PG_corrs_inputs$Gene1 == "RPL10A"]), sd = sd(Full_PG_corrs_inputs$SeqSim[Full_PG_corrs_inputs$Gene1 == "RPL10A"])))
-
-ggplot(Full_PG_corrs_inputs[Full_PG_corrs_inputs$Gene1 == "RPL10A",], aes(Mean_NBM)) + geom_histogram() +
-  stat_function(fun = dnorm, lwd = 2, col = 'red',
-                args = list(mean = mean(Full_PG_corrs_inputs$Mean_NBM[Full_PG_corrs_inputs$Gene1 == "RPL10A"]), sd = sd(Full_PG_corrs_inputs$Mean_NBM[Full_PG_corrs_inputs$Gene1 == "RPL10A"])))
-
-
-ggplot(Full_PG_corrs_inputs[Full_PG_corrs_inputs$Gene1 == "RPL10A",], aes(Mean_BALL)) + geom_histogram() +
-  stat_function(fun = dnorm, lwd = 2, col = 'red',
-                args = list(mean = mean(Full_PG_corrs_inputs$Mean_BALL[Full_PG_corrs_inputs$Gene1 == "RPL10A"]), sd = sd(Full_PG_corrs_inputs$Mean_BALL[Full_PG_corrs_inputs$Gene1 == "RPL10A"])))
-
-ggplot(RPL31_corrs_inputs[-27,], aes(Mean_NBM)) + geom_histogram() +
-stat_function(fun = dnorm, lwd = 2, col = 'red',
-args = list(mean = mean(RPL31_corrs_inputs$Mean_NBM[-27]), sd = sd(RPL31_corrs_inputs$Mean_NBM[-27])))
-
-ggplot(RPL31_corrs_inputs[-27,], aes(SeqSim)) + geom_histogram() +
-stat_function(fun = dnorm, lwd = 2, col = 'red',
-args = list(mean = mean(RPL31_corrs_inputs$SeqSim[-27]), sd = sd(RPL31_corrs_inputs$SeqSim[-27])))
-
-Hist_full.BALL <- ggplot(Full_corr_df, aes(CorrV_BALL)) + geom_histogram(binwidth = 0.05) +
-  stat_function(fun = dnorm, lwd = 2, col = 'red',
-                args = list(mean = mean(Full_corr_df$CorrV_BALL), sd = sd(Full_corr_df$CorrV_BALL)))
-
-Hist_full.NBM <- ggplot(Full_corr_df, aes(CorrV_NBM)) + geom_histogram(binwidth = 0.05) +
-  stat_function(fun = dnorm, lwd = 2, col = 'red',
-                args = list(mean = mean(Full_corr_df$CorrV_NBM), sd = sd(Full_corr_df$CorrV_NBM)))
-
-#Find out number of pseudogenes per parental gene
-
-for(i in 1:length(Full_corr_df$Gene)) {
-  
-  gene <- Full_corr_df$Gene[i]
-  PG_TPMs_BALL <- BALL_BM_tpms_rm_PS[grep(paste("^", gene, "$|", gene, "P",  "\\d+", sep = ""), rownames(BALL_BM_tpms_rm_PS)),]
-  
-  if(length(rownames(PG_TPMs_BALL)) >= 10){
-    if(!exists("relevant_genes")){
-      relevant_genes <- gene
-    } else {
-      relevant_genes <- c(relevant_genes,gene)
-    }
-  }
-}
-
-#Genes with more than 10 genes
-Filtered_Full_corr_df <- Full_corr_df[Full_corr_df$Gene %in% relevant_genes,]
-
-Hist_RevGenes_pval.BALL <- ggplot(Filtered_Full_corr_df[Filtered_Full_corr_df$CorrP_BALL <= 0.05,], aes(CorrV_BALL)) + 
-  geom_histogram(binwidth = 0.15) +
-  stat_function(fun = dnorm, lwd = 2, col = 'red',
-                args = list(mean = mean(Filtered_Full_corr_df$CorrV_BALL), sd = sd(Filtered_Full_corr_df$CorrV_BALL)))
-
-Hist_RevGenes_pval.NBM <- ggplot(Filtered_Full_corr_df[Filtered_Full_corr_df$CorrP_NBM <= 0.05,], aes(CorrV_NBM)) + 
-  geom_histogram(binwidth = 0.15) +
-  stat_function(fun = dnorm, lwd = 2, col = 'red',
-                args = list(mean = mean(Filtered_Full_corr_df$CorrV_NBM), sd = sd(Filtered_Full_corr_df$CorrV_NBM)))
-
-#Now adj pval
-Filtered_Full_corr_df <- Filtered_Full_corr_df %>% 
-  mutate(adj.pval.BALL = p.adjust(Filtered_Full_corr_df$CorrP_BALL, method = "fdr", n = 2*length(Filtered_Full_corr_df$CorrP_BALL))) %>%
-  mutate(adj.pval.NBM = p.adjust(Filtered_Full_corr_df$CorrP_NBM, method = "fdr", n = 2*length(Filtered_Full_corr_df$CorrP_NBM)))
-
-Hist_RevGenes_pvalAdj.BALL <- ggplot(Filtered_Full_corr_df[Filtered_Full_corr_df$adj.pval.BALL <= 0.05,], aes(CorrV_BALL)) + geom_histogram(binwidth = 0.01) +
-  stat_function(fun = dnorm, lwd = 2, col = 'red',
-                args = list(mean = mean(Filtered_Full_corr_df$CorrV_BALL), sd = sd(Filtered_Full_corr_df$CorrV_BALL)))
-
-Hist_RevGenes_pvalAdj.NBM = ggplot(Filtered_Full_corr_df[Filtered_Full_corr_df$adj.pval.NBM <= 0.05,], aes(CorrV_NBM)) + geom_histogram(binwidth = 0.01) +
-  stat_function(fun = dnorm, lwd = 2, col = 'red',
-                args = list(mean = mean(Filtered_Full_corr_df$CorrV_NBM), sd = sd(Filtered_Full_corr_df$CorrV_NBM)))
-
-#Cut based on CorrV
-
-  ggplot(Filtered_Full_corr_df[Filtered_Full_corr_df$CorrV_BALL >= 0.5,], aes(CorrV_BALL)) + geom_histogram(binwidth = 0.05) +
-  stat_function(fun = dnorm, lwd = 2, col = 'red',
-                args = list(mean = mean(Filtered_Full_corr_df$CorrV_BALL), sd = sd(Filtered_Full_corr_df$CorrV_BALL)))
-
-  ggplot(Filtered_Full_corr_df[Filtered_Full_corr_df$CorrV_NBM >= 0.5,], aes(CorrV_NBM)) + geom_histogram(binwidth = 0.05) +
-    stat_function(fun = dnorm, lwd = 2, col = 'red',
-                  args = list(mean = mean(Filtered_Full_corr_df$CorrV_NBM), sd = sd(Filtered_Full_corr_df$CorrV_NBM)))
-  
   
   
