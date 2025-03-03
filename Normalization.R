@@ -513,6 +513,8 @@ BALL_TARGET_norm <- readRDS("Scripts/NormData/BALL_TARGET_norm.RDS")
 annot_TCGA<- annot_TCGA[annot_TCGA$HGNC_symbol %in% rownames(BALL_TARGET_norm), ]
 annot_TCGA<- annot_TCGA[match(rownames(BALL_TARGET_norm),annot_TCGA$HGNC_symbol),]
 
+saveRDS(annot_TCGA, "annot_TCGA.RDS")
+
 #### PCAs normalized expression ####
 
 #MP2PRT
