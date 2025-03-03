@@ -508,7 +508,6 @@ saveRDS(BALL_MP2PRT_norm, "NormData/BALL_MP2PRT_norm.RDS")
 
 BALL_TARGET_norm <- norm(BALL_TARGET_F, annot_TCGA, CI.BALL_TARGET_F)
 saveRDS(BALL_TARGET_norm, "NormData/BALL_TARGET_norm.RDS")
-BALL_TARGET_norm <- readRDS("Scripts/NormData/BALL_TARGET_norm.RDS")
 
 annot_TCGA<- annot_TCGA[annot_TCGA$HGNC_symbol %in% rownames(BALL_TARGET_norm), ]
 annot_TCGA<- annot_TCGA[match(rownames(BALL_TARGET_norm),annot_TCGA$HGNC_symbol),]
