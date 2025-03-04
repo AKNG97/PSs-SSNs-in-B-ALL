@@ -216,11 +216,11 @@ ALL_primaryBM <- ALL[,ALL$definition == "Primary Blood Derived Cancer - Bone Mar
 CI.ALL <- as.data.frame(colData(ALL_primaryBM))
 
 #Load Clinical Information from TCGA
-CI_1_ALL <- readxl::read_xlsx("ClinicalFiles/ClinicalFiles/ALL_CI_1.xlsx")
-CI_2_ALL <- readxl::read_xlsx("ClinicalFiles/ClinicalFiles/ALL_CI_2.xlsx")
-CI_3_ALL <- readxl::read_xlsx("ClinicalFiles/ClinicalFiles/ALL_CI_3.xlsx")
-CI_4_ALL <- readxl::read_xlsx("ClinicalFiles/ClinicalFiles/ALL_CI_4.xlsx")
-CI_5_ALL <- readxl::read_xlsx("ClinicalFiles/ClinicalFiles/ALL_CI_5.xlsx")
+CI_1_ALL <- readxl::read_xlsx("ClinicalFiles/ALL_CI_1.xlsx")
+CI_2_ALL <- readxl::read_xlsx("ClinicalFiles/ALL_CI_2.xlsx")
+CI_3_ALL <- readxl::read_xlsx("ClinicalFiles/ALL_CI_3.xlsx")
+CI_4_ALL <- readxl::read_xlsx("ClinicalFiles/ALL_CI_4.xlsx")
+CI_5_ALL <- readxl::read_xlsx("ClinicalFiles/ALL_CI_5.xlsx")
 
 CI_full_ALL <- rbind(CI_1_ALL, CI_2_ALL, CI_3_ALL, CI_4_ALL, CI_5_ALL)
 table(CI_full_ALL$`Cell of Origin`)
