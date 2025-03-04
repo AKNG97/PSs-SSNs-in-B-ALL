@@ -1,10 +1,21 @@
 #This script swhows how to calculate the
 #LIONESS networks in an expression matrix
 
-Cancer_ExprM <- readRDS("NormData/BALL_TARGET_norm.RDS")
-Cancer_GCN <- readRDS("GCN_BALL_TARGET.RDS")
-Cancer_ExprM <- Cancer_ExprM[,1:132]
-Cancer_GCN$Sp_corr <- as.numeric(Cancer_GCN$Sp_corr)
+library(dplyr)
+library(tidyr)
+library(Hmisc)
+library(future)
+library(future.apply)
+
+Cancer_ExprM.TARGET <- readRDS("NormData/BALL_TARGET_norm.RDS")
+Cancer_GCN.TARGET <- readRDS("GCN_BALL_TARGET.RDS")
+Cancer_ExprM.TARGET <- Cancer_ExprM.TARGET[,1:132]
+Cancer_GCN.TARGET$Sp_corr <- as.numeric(Cancer_GCN.TARGET$Sp_corr)
+
+Cancer_ExprM.MP2 <- readRDS("NormData/BALL_TARGET_norm.RDS")
+Cancer_GCN.MP2 <- readRDS("GCN_BALL_TARGET.RDS")
+Cancer_ExprM.MP2 <- Cancer_ExprM.MP2[,1:1284]
+Cancer_GCN.MP2$Sp_corr <- as.numeric(Cancer_GCN.MP2$Sp_corr)
 
 Lioness_ParSamples <- function(sample){
   
@@ -43,9 +54,18 @@ Lioness_ParSamples <- function(sample){
   
 }
 
-sample.list <- colnames(Cancer_ExprM)
+sample.list <- colnames(Cancer_ExprM.TARGET)
 future::plan(multisession, workers = 45)
 results <- future_lapply(sample.list, FUN = Lioness_ParSamples, future.seed = TRUE)
 SSN <- Reduce(function(x, y) inner_join(x, y, by = "Edge_ID"), results)
 dim(SSN)
 write.csv(SSN, "Lioness_BALL_TARGET.csv", quote = FALSE, row.names = F)
+
+sample.list <- colnames(Cancer_ExprM.MP2)
+future::plan(multisession, workers = 45)
+results <- future_lapply(sample.list, FUN = Lioness_ParSamples, future.seed = TRUE)
+SSN <- Reduce(function(x, y) inner_join(x, y, by = "Edge_ID"), results)
+dim(SSN)
+write.csv(SSN, "Lioness_BALL_MP2.csv", quote = FALSE, row.names = F)
+
+              
