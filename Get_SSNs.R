@@ -12,8 +12,8 @@ Cancer_GCN.TARGET <- readRDS("GCN_BALL_TARGET.RDS")
 Cancer_ExprM.TARGET <- Cancer_ExprM.TARGET[,1:132]
 Cancer_GCN.TARGET$Sp_corr <- as.numeric(Cancer_GCN.TARGET$Sp_corr)
 
-Cancer_ExprM.MP2 <- readRDS("NormData/BALL_TARGET_norm.RDS")
-Cancer_GCN.MP2 <- readRDS("GCN_BALL_TARGET.RDS")
+Cancer_ExprM.MP2 <- readRDS("NormData/BALL_MP2PRT_norm.RDS")
+Cancer_GCN.MP2 <- readRDS("GCN_BALL_MP2PRT.RDS")
 Cancer_ExprM.MP2 <- Cancer_ExprM.MP2[,1:1284]
 Cancer_GCN.MP2$Sp_corr <- as.numeric(Cancer_GCN.MP2$Sp_corr)
 
