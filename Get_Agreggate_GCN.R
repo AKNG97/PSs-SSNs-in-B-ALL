@@ -1,3 +1,5 @@
+#This script shows how to construct the aggregate GCN using a normalized expression matrix
+
 library(dplyr)
 library(tidyr)
 library(Hmisc)
@@ -6,13 +8,11 @@ library(future.apply)
 
 dir.create("GCNs/")
 
-#Load expression matrices
-
+#Load expression matrix
 BALL_TARGET_norm <- readRDS("NormData/BALL_TARGET_norm.RDS")
-BALL_MP2PRT_norm <- readRDS("/storage/kuijjerarea/akng/PseudogenesAnalysis/HandleReps/ExtCI/MP2PRT/CorrectCI/Full_Correct/NormData/MP2PRT_BM_norm_FULL.RDS")
-BALL_MP2PRT_norm <- BALL_MP2PRT_norm[,1:1284]
+#We exclude the normal samples
+BALL_TARGET_norm <- BALL_TARGET_norm[,1:132]
 
-#Paralelo
 par_Sp_Corr <- function(expr_m, x){
   
   gene1 <- rownames(expr_m)[x]
@@ -51,13 +51,11 @@ par_Sp_Corr <- function(expr_m, x){
 }
 dir.create("GCNs_par2")
 future::plan(multisession, workers = 60)
-results <- future_lapply(expr_m = BALL_MP2PRT_norm, 1:nrow(BALL_MP2PRT_norm), 
+results <- future_lapply(expr_m = BALL_TARGET_norm, 1:nrow(BALL_TARGET_norm), 
                          FUN = par_Sp_Corr, future.seed = TRUE)
 GCN <- do.call(rbind, results)
 GCN <- GCN[!duplicated(GCN$ID),]
 GCN <- GCN %>% as.data.frame() %>% arrange(desc(abs))
-#write.csv(GCN[1:1e+05,], "BALL_GCN_Sp_100k.csv", quote = FALSE, row.names = F)
-#write.csv(GCN[1:1e+07,], "BALL_GCN_Sp_10M.csv", quote = FALSE, row.names = F)
-#write.csv(GCN[1:1e+04,], "BALL_GCN_Sp_10k.csv", quote = FALSE, row.names = F)
-saveRDS(GCN, "BALL_MP2_GCN_SignifEdges_2ndRun.RDS")
-#saveRDS(GCN %>% filter(p_value < 1e-08), "GCNs/BALL_TARGET_and_NBM_GCN_SignifEdges.RDS")
+
+saveRDS(GCN, "GCN_BALL_TARGET.RDS")
+
