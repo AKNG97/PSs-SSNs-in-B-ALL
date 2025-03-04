@@ -17,10 +17,12 @@ library(parallel)
 
 #### Let's check if highly connected genes have high SeqSim between pairs ####
 #1. Load GCN of PS
-GCN <- readRDS("GCN.RDS")
+GCN <- readRDS("GCN_BALL_TARGET.RDS")
 
-annotPS <- readRDS("Pseudogenes_anotation_file.RDS")
-annot <- readRDS("Gene_annotation_file_of_expression_matrix.RDS")
+annot <- read.delim("gene_annotation_TCGA.tsv")
+
+annotPS <- annot_TCGA[intersect(grep(".*pseudogene", annot_TCGA$gene_type), 
+                                 grep(".*pseudogene", annot_TCGA$Type)),]
 
 #Filter GCN to select Pseudogene-Pseudogene edges
 
@@ -129,7 +131,7 @@ for(i in 1:length(co)){
 
 #### Now let's analyze pseudogenes families and see if their expression is correlated to their SeqSim with the Parental Gene ####
 
-ALL <- readRDS("TARGET_P2_SummarizedExperiment.RDS")
+ALL <- readRDS("RawData/ALL_TARGET.RDS")
 
 dim(ALL)
 #[1] 60660   532
@@ -156,11 +158,11 @@ ALL_primaryBM <- ALL[,ALL$definition == "Primary Blood Derived Cancer - Bone Mar
 CI.ALL <- as.data.frame(colData(ALL_primaryBM))
 
 #Load Clinical Information from TCGA
-CI_1_ALL <- readxl::read_xlsx("ALL_CI_1.xlsx")
-CI_2_ALL <- readxl::read_xlsx("ALL_CI_2.xlsx")
-CI_3_ALL <- readxl::read_xlsx("ALL_CI_3.xlsx")
-CI_4_ALL <- readxl::read_xlsx("ALL_CI_4.xlsx")
-CI_5_ALL <- readxl::read_xlsx("ALL_CI_5.xlsx")
+CI_1_ALL <- readxl::read_xlsx("ClinicalFiles/ALL_CI_1.xlsx")
+CI_2_ALL <- readxl::read_xlsx("ClinicalFiles/ALL_CI_2.xlsx")
+CI_3_ALL <- readxl::read_xlsx("ClinicalFiles/ALL_CI_3.xlsx")
+CI_4_ALL <- readxl::read_xlsx("ClinicalFiles/ALL_CI_4.xlsx")
+CI_5_ALL <- readxl::read_xlsx("ClinicalFiles/ALL_CI_5.xlsx")
 
 CI_full_ALL <- rbind(CI_1_ALL, CI_2_ALL, CI_3_ALL, CI_4_ALL, CI_5_ALL)
 table(CI_full_ALL$`Cell of Origin`)
@@ -226,8 +228,10 @@ which((1:ncol(BALL) == match(colnames(BALL), CI_BALL$barcode)) == FALSE)
 
 BALL_TPM <- assay(BALL, 4)
 
-annotPS <- readRDS("Pseudogenes_anotation_file.RDS")
-annot <- readRDS("Gene_annotation_file_of_expression_matrix.RDS")
+annot <- read.delim("gene_annotation_TCGA.tsv")
+
+annotPS <- annot_TCGA[intersect(grep(".*pseudogene", annot_TCGA$gene_type), 
+                                 grep(".*pseudogene", annot_TCGA$Type)),]
                              
 BALL_TPM <- BALL_TPM[rownames(BALL_TPM) %in% annot$gene_id, ]
 rownames(BALL_TPM) <- annot$HGNC_symbol[match(rownames(BALL_TPM), annot$gene_id)]
