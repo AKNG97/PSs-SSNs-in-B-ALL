@@ -35,14 +35,18 @@ Lioness_BALL_TARGET2 = Lioness_BALL_TARGET[rownames(Lioness_BALL_TARGET) %in%
                                                Cancer_GCN$ID,]
 
 #Filter network1
-filtered_results_TARGET1 <- featurefilter(Lioness_BALL_TARGET1, percentile=1508*100/39082,
+filtered_results_TARGET1 <- featurefilter(Lioness_BALL_TARGET1, percentile=1508*100/nrow(Lioness_BALL_TARGET1),
                                          method='var', topN=5)
 #Filter network2
 filtered_results_TARGET2 <- featurefilter(Lioness_BALL_TARGET2, percentile=25,
                                          method='var', topN=5)
+#Filter network3 (complete network)
+filtered_results_TARGET3 <- featurefilter(Lioness_BALL_TARGET, percentile=1508*100/nrow(Lioness_BALL_TARGET),
+                                         method='var', topN=5)
 
 Lioness_BALL_TARGET_scaled1 <- as.data.frame(t(scale(t(filtered_results_TARGET1$filtered_data))))
 Lioness_BALL_TARGET_scaled2 <- as.data.frame(t(scale(t(filtered_results_TARGET2$filtered_data))))
+Lioness_BALL_TARGET_scaled3 <- as.data.frame(t(scale(t(filtered_results_TARGET3$filtered_data))))
 
 #Run Clustering algorithm with each filterd and scaled network, here we run it with the Ps-Ps network
 r.hc_TARGET <- M3C(Lioness_BALL_TARGET_scaled2, method=1, clusteralg = "hc", cores = 30, maxK = 10, seed = 123)
@@ -137,14 +141,18 @@ Lioness_BALL_MP22 = Lioness_BALL_TARGET[rownames(Lioness_BALL_MP2) %in%
                                                Cancer_GCN$ID,]
 
 #Filter network1
-filtered_results_MP21 <- featurefilter(Lioness_BALL_MP21, percentile=4811*100/524894,
+filtered_results_MP21 <- featurefilter(Lioness_BALL_MP21, percentile=4811*100/nrow(Lioness_BALL_MP21),
                                          method='var', topN=5)
 #Filter network2
 filtered_results_MP22 <- featurefilter(Lioness_BALL_MP22, percentile=25,
                                          method='var', topN=5)
+#Filter network3 (complete network)
+filtered_results_MP23 <- featurefilter(Lioness_BALL_MP2, percentile=4811*100/nrow(Lioness_BALL_MP2),
+                                         method='var', topN=5)
 
 Lioness_BALL_MP2_scaled1 <- as.data.frame(t(scale(t(filtered_results_MP21$filtered_data))))
 Lioness_BALL_MP2_scaled2 <- as.data.frame(t(scale(t(filtered_results_MP22$filtered_data))))
+Lioness_BALL_MP2_scaled3 <- as.data.frame(t(scale(t(filtered_results_MP23$filtered_data))))
 
 #The Clustering algorithm should be performed with each filterd and scaled network, here we only run it with the Ps-Ps network
 r.hc_MP2 <- M3C(Lioness_BALL_MP2_scaled2, method=1, clusteralg = "hc", cores = 30, maxK = 10, seed = 123)
