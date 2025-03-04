@@ -2,7 +2,7 @@
 #LIONESS networks in an expression matrix
 
 Cancer_ExprM <- readRDS("NormData/BALL_TARGET_norm.RDS")
-Cancer_GCN <- readRDS("BALL_TARGET.RDS")
+Cancer_GCN <- readRDS("GCN_BALL_TARGET.RDS")
 Cancer_ExprM <- Cancer_ExprM[,1:132]
 Cancer_GCN$Sp_corr <- as.numeric(Cancer_GCN$Sp_corr)
 
