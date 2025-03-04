@@ -1,3 +1,6 @@
+#This script shows the analysis of sequence similarity between pseudogenes and their parental genes
+#using the data from TARGET-ALL-P2
+
 library(SummarizedExperiment)
 library(TCGAbiolinks)
 require(dplyr)
@@ -11,9 +14,6 @@ library(infotheo)
 library(ggplot2)
 library(igraph)
 library(parallel)
-
-#/storage/kuijjerarea/akng/PseudogenesAnalysis/HandleReps/ExtCI/SeqSim/
-#module load R/4.2.1-foss-2022a
 
 #### Let's check if highly connected genes have high SeqSim between pairs ####
 #1. Load GCN of PS
