@@ -1,3 +1,6 @@
+#This script shows how to perform the clustering analysis of samples
+#using the LIONESS networks
+
 library(ComplexHeatmap)
 library(dplyr)
 library(ggsurvfit)
@@ -11,9 +14,9 @@ library(ggplot2)
 
 ##### TARGET #####
 
-Lioness_BALL_TARGET = read.csv("/storage/kuijjerarea/akng/PseudogenesAnalysis/HandleReps/ExtCI/Lioness_TARGET_BALL_FULL_final.csv", row.names = 1)
+Lioness_BALL_TARGET = read.csv("Lioness_BALL_TARGET.csv", row.names = 1)
 
-Cancer_GCN <- readRDS("/storage/kuijjerarea/akng/PseudogenesAnalysis/HandleReps/ExtCI/Bootsrtrapping/BALL_GCN_Sp_sequential.RDS")
+Cancer_GCN <- readRDS("GCN_BALL_TARGET.RDS")
 
 annot <- read.delim("gene_annotation_TCGA.tsv")
 
