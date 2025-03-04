@@ -5,3 +5,4 @@ This repository contains the code for the paper: "Single-sample co-expression ne
 The code was written and executed in R.
 
 For the normalization and extraction of the clinical information, the files from the folder "ClinicalFiles" are needed.
+These clinical files were obtained from the GDC (https://portal.gdc.cancer.gov/)
