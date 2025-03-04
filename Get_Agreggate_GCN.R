@@ -10,8 +10,10 @@ dir.create("GCNs/")
 
 #Load expression matrix
 BALL_TARGET_norm <- readRDS("NormData/BALL_TARGET_norm.RDS")
+BALL_MP2PRT_norm <- readRDS("NormData/BALL_MP2PRT_norm.RDS")
 #We exclude the normal samples
 BALL_TARGET_norm <- BALL_TARGET_norm[,1:132]
+BALL_MP2PRT_norm <- BALL_MP2PRT_norm[,1:1284]
 
 par_Sp_Corr <- function(expr_m, x){
   
@@ -44,18 +46,24 @@ par_Sp_Corr <- function(expr_m, x){
     }
   }
   if(exists("coexpr")){
-    saveRDS(coexpr, paste0("GCNs_par2/GCN_", gene1, ".RDS"))
-    #write.csv(coexpr, paste0("GCNs_par/GCN_", gene1, ".csv"), quote = F, row.names = F)
     return(coexpr)
   }
 }
-dir.create("GCNs_par2")
+
 future::plan(multisession, workers = 60)
 results <- future_lapply(expr_m = BALL_TARGET_norm, 1:nrow(BALL_TARGET_norm), 
                          FUN = par_Sp_Corr, future.seed = TRUE)
 GCN <- do.call(rbind, results)
 GCN <- GCN[!duplicated(GCN$ID),]
 GCN <- GCN %>% as.data.frame() %>% arrange(desc(abs))
-
 saveRDS(GCN, "GCN_BALL_TARGET.RDS")
+
+results <- future_lapply(expr_m = BALL_MP2PRT_norm, 1:nrow(BALL_MP2PRT_norm), 
+                         FUN = par_Sp_Corr, future.seed = TRUE)
+GCN <- do.call(rbind, results)
+GCN <- GCN[!duplicated(GCN$ID),]
+GCN <- GCN %>% as.data.frame() %>% arrange(desc(abs))
+
+saveRDS(GCN, "GCN_BALL_MP2PRT.RDS")
+
 
